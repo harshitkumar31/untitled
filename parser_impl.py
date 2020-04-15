@@ -9,6 +9,7 @@ class Parser():
             ['NUMBER', 'PRINT', 'OPEN_PAREN', 'CLOSE_PAREN',
              'SEMI_COLON', 'SUM', 'SUB']
         )
+        self.parse()
 
     def parse(self):
         @self.pg.production('program : PRINT OPEN_PAREN expression CLOSE_PAREN SEMI_COLON')
