@@ -1,6 +1,14 @@
-INTEGER, PLUS, MINUS, MULT, DIV, LPAREN, RPAREN, EOF = (
-    'INTEGER', 'PLUS', 'MINUS', 'MULT', 'DIV', '(', ')', 'EOF'
+######################################################
+#                                                    #
+#        Lexer, Interpreter & Parser                 #
+#                                                    #
+######################################################
+
+INTEGER, PLUS, MINUS, MULT, DIV, ASSIGN, SEMI, DOT, BEGIN, END, ID, LPAREN, RPAREN, EOF = (
+    'INTEGER', 'PLUS', 'MINUS', 'MULT', 'DIV', 'ASSIGN', 'SEMI', 'DOT', 'BEGIN', 'END', 'ID', '(', ')', 'EOF'
     )
+
+
 
 class Token(object):
     def __init__(self, type, value):
@@ -15,6 +23,11 @@ class Token(object):
     
     def __repr__(self):
         return self.__str__()
+
+RESERVED_KEYWORDS = {
+    'BEGIN': Token('BEGIN', 'BEGIN'),
+    'END': Token('END', 'END'),
+}
 
 class Lexer(object):
     def __init__(self, text):
@@ -33,6 +46,13 @@ class Lexer(object):
         else:
             self.current_char = self.text[self.pos]
 
+    def peek(self):
+        peek_pos = self.pos + 1
+        if peek_pos > len(self.text) - 1:
+            return None
+        else:
+            return self.text[peek_pos]
+
     def skip_whitespace(self):
         while self.current_char is not None and self.current_char.isspace():
             self.advance()
@@ -44,18 +64,49 @@ class Lexer(object):
             self.advance()
         return int(result)
 
+    def _id(self):
+        """
+        Handles identifiers and reserved keywords
+        """
+        result = ''
+        while self.current_char is not None and self.current_char.isalnum():
+            result += self.current_char
+            self.advance()
+        
+        token = RESERVED_KEYWORDS.get(result, Token(ID, result))
+        return token
+
     def get_next_token(self):
         """
         Lexical analyzer
         """
         while self.current_char is not None:
 
+
             if self.current_char.isspace():
                 self.skip_whitespace()
                 continue
 
+            if self.current_char.isalpha():
+                return self._id()
+
             if self.current_char.isdigit():
                 return Token(INTEGER, self.integer())
+
+
+            if self.current_char == ':' and self.peek() == '=':
+                self.advance()
+                self.advance()
+                return Token(ASSIGN, ':=')
+
+            if self.current_char == ';':
+                self.advance()
+                return Token(SEMI, ';')
+
+            if self.current_char == '.':
+                self.advance()
+                return Token(DOT, '.')
+
 
             if self.current_char == '+':
                 self.advance()
@@ -103,6 +154,28 @@ class Num(AST):
         self.token = token
         self.value = token.value
 
+class UnaryOp(AST):
+    def __init__(self, op, expr):
+        self.token = self.op = op
+        self.expr = expr
+
+class Compound(AST):
+    def __init__(self):
+        self.children = []
+
+class Assign(AST):
+    def __init__(self, left, op, right):
+        self.left = left
+        self.token = self.op = op
+        self.right = right
+
+class Var(AST):
+    def __init__(self, token):
+        self.token = token
+        self.value = token.value
+
+class NoOp(AST):
+    pass
 
 class Parser(object):
     def __init__(self, lexer):
@@ -125,6 +198,70 @@ class Parser(object):
         else:
             self.error()
 
+    def program(self):
+        node = self.compound_statement()
+        self.eat(DOT)
+        return node
+
+    def compound_statement(self):
+        self.eat(BEGIN)
+        nodes = self.statement_list()
+        self.eat(END)
+
+        root = Compound()
+        for node in nodes:
+            root.children.append(node)
+        
+        return root
+
+    def statement_list(self):
+        node = self.statement()
+
+        results = [node]
+
+        while self.current_token.type == SEMI:
+            self.eat(SEMI)
+            results.append(self.statement())
+
+        if self.current_token.type == ID:
+            self.error()
+
+        return results
+
+    def statement(self):
+        if self.current_token.type == BEGIN:
+            node = self.compound_statement()
+        elif self.current_token.type == ID:
+            node = self.assignment_statement()
+        else:
+            node = self.empty()
+        return node
+
+
+    def assignment_statement(self):
+        """
+        assignment_statement : variable ASSIGN expr
+        """
+        left = self.variable()
+        token = self.current_token
+        self.eat(ASSIGN)
+        right = self.expr()
+        node = Assign(left, token, right)
+        return node
+
+
+    def variable(self):
+        """
+        variable: ID
+        """
+        node = Var(self.current_token)
+        self.eat(ID)
+        return node
+
+    def empty(self):
+        # Empty production
+        return NoOp()
+    
     def term(self):
         """ term: factor ((MUL|DIV) factor) """
         node = self.factor()
@@ -141,7 +278,22 @@ class Parser(object):
         return node
 
     def factor(self):
+        """factor : PLUS  factor
+              | MINUS factor
+              | INTEGER
+              | LPAREN expr RPAREN
+              | variable
+        """
         token = self.current_token
+        if token.type == PLUS:
+            self.eat(PLUS)
+            node = UnaryOp(token, self.factor())
+            return node
+
+        elif token.type == MINUS:
+            self.eat(MINUS)
+            node = UnaryOp(token, self.factor())
+            return node
         if token.type == INTEGER:
             self.eat(INTEGER)
             return Num(token)
@@ -150,16 +302,12 @@ class Parser(object):
             node = self.expr()
             self.eat(RPAREN)
             return node
+        else:
+            node = self.variable()
+            return node
 
     def expr(self):
-        """Arithmetic expression parser / interpreter.
-
-        calc>  14 + 2 * 3 - 6 / 2
-        17
-
-        expr   : term ((PLUS | MINUS) term)*
-        term   : factor ((MUL | DIV) factor)*
-        factor : INTEGER
+        """
         """        
         node = self.term()
 
@@ -175,7 +323,11 @@ class Parser(object):
         return node
 
     def parse(self):
-        return self.expr()
+        node = self.program()
+        if self.current_token.type != EOF:
+            self.error()
+
+        return node
 
 
 #############################################################
@@ -191,6 +343,9 @@ class NodeVisitor(object):
         raise Exception('No visit_{} method'.format(type(node).__name__))
 
 class Interpreter(NodeVisitor):
+
+    GLOBAL_SCOPE = {}
+
     def __init__(self, parser):
         self.parser = parser
 
@@ -204,28 +359,52 @@ class Interpreter(NodeVisitor):
         elif node.op.type == DIV:
             return self.visit(node.left) / self.visit(node.right)
 
+    def visit_UnaryOp(self, node):
+        op = node.op.type 
+        if op == PLUS:
+            return +self.visit(node.expr)
+        elif op == MINUS:
+            return -self.visit(node.expr)
+
     def visit_Num(self, node):
         return node.value
 
+    def visit_Compound(self, node):
+        for child in node.children:
+            self.visit(child)
+
+    def visit_Assign(self, node):
+        var_name = node.left.value
+        self.GLOBAL_SCOPE[var_name] = self.visit(node.right)
+
+    def visit_Var(self, node):
+        var_name = node.value
+        val = self.GLOBAL_SCOPE.get(var_name)
+        if val is None:
+            raise NameError(repr(var_name))
+        else:
+            return val
+
+    def visit_NoOp(self, node):
+        pass
+
     def interpret(self):
         tree = self.parser.parse()
+        if tree is None:
+            return ''
         return self.visit(tree)
 
     
 
 def main():
-    while True:
-        try:
-            text = input('#it> ')
-        except EOFError:
-            break
-        if not text:
-            continue
-        lexer = Lexer(text)
-        parser = Parser(lexer)
-        interpreter = Interpreter(parser)
-        result = interpreter.interpret()
-        print(result)
+    
+    import sys
+    text = open(sys.argv[1], 'r').read()
+    lexer = Lexer(text)
+    parser = Parser(lexer)
+    interpreter = Interpreter(parser)
+    interpreter.interpret()
+    print(interpreter.GLOBAL_SCOPE)
 
 
 
